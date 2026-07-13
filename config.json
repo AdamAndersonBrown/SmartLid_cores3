@@ -1,0 +1,9 @@
+{
+    "window_size": 20,
+    "num_features": 6,
+    "normalization_factor": 32768.0,
+    "polling_rate_ms": 50,
+    "trigger_cooldown_ms": 3000,
+    "confidence_threshold": 0.85,
+    "tensor_arena_size": 32768
+}

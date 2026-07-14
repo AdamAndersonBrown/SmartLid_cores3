@@ -11,8 +11,8 @@ static SemaphoreHandle_t audio_semaphore = NULL;
 static const char *TAG = "SPEAKER";
 
 void core2_set_amp(bool enable) {
-    uint8_t cmd[2] = {0x94, enable ? 0x04 : 0x00};
-    i2c_master_write_to_device(I2C_NUM_0, 0x34, cmd, 2, pdMS_TO_TICKS(10));
+    // STRICT FIX: Neutered. AXP2101 handles amp power. 
+    // Writing to 0x94 shuts off the ALDO3 LCD logic rail and kills the screen!
 }
 
 static void speaker_task(void *pvParameters) {

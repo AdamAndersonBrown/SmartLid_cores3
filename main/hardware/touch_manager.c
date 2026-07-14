@@ -7,6 +7,8 @@
 #include "driver/i2c.h"
 #include "esp_log.h"
 #include "common_defs.h"
+#include "freertos/semphr.h"
+extern SemaphoreHandle_t i2c_mutex;
 
 volatile int active_event_tag = 0;
 #include "display_manager.h"
@@ -28,7 +30,11 @@ void touch_task(void *pvParameters) {
 
     while(1) {
         uint8_t reg = 0x02; 
-        esp_err_t err = i2c_master_write_read_device(I2C_NUM_0, FT6336U_ADDR, &reg, 1, data, 5, pdMS_TO_TICKS(10));
+        esp_err_t err = ESP_FAIL;
+        if (i2c_mutex && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            err = i2c_master_write_read_device(I2C_NUM_0, FT6336U_ADDR, &reg, 1, data, 5, pdMS_TO_TICKS(10));
+            xSemaphoreGive(i2c_mutex);
+        }
         
         bool is_touched = false;
         if (err == ESP_OK) {

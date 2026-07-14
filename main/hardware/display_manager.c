@@ -85,6 +85,8 @@ void display_manager_wake(void) {
 static lv_obj_t * qr_bg = NULL; // Global reference to the active QR overlay
 
 static void display_sleep_task(void *pvParam) {
+    vTaskDelete(NULL); return; // STRICT FIX: Task obliterated
+
     while(1) {
         // Block the 10s idle sleep timer if the QR code is currently on screen
         if (0) { // STRICT FIX: Sleep disabled to prevent CHGLED trigger

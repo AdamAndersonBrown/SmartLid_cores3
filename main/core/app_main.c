@@ -155,8 +155,8 @@ void app_main(void) {
     display_manager_fill_screen(COLOR_BLUE); // Keep UI visible for debugging
     // ---------------------------------------
 
-    speaker_manager_init();
-    servo_manager_init();
+    // speaker_manager_init(); // DISABLED: Frees GPIO 0 (Green LED) and 12 (I2C)
+    // servo_manager_init(); // DISABLED: Frees GPIO 33 (Audio Bus)
     start_imu_telemetry_task(); // Start polling AFTER boot handling is done
     inference_manager_init();
     

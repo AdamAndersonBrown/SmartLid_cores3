@@ -36,7 +36,7 @@ TfLiteTensor* input = nullptr;
 TfLiteTensor* output = nullptr;
 
 constexpr int kTensorArenaSize = 48 * 1024;
-alignas(16) static uint8_t tensor_arena[kTensorArenaSize];
+__attribute__((section(".dram1.bss"))) alignas(16) static uint8_t tensor_arena[kTensorArenaSize];
 
 extern "C" void inference_manager_init(void) {
     model = tflite::GetModel(smartlid_model_tflite);
@@ -163,8 +163,8 @@ extern "C" void inference_run(void) {
     }
 
     if (1) { // Unconditional logging unlocked
-        // ESP_LOGI("ML_TELEMETRY", "Idle: %3.0f%% | Rattle: %3.0f%% | Lift: %3.0f%% | VZ: %.2f",
-        //         results[0] * 100.0f, results[1] * 100.0f, results[2] * 100.0f, velocity[2]);
+        ESP_LOGI("ML_TELEMETRY", "Idle: %3.0f%% | Rattle: %3.0f%% | Lift: %3.0f%% | VZ: %.2f",
+        results[0] * 100.0f, results[1] * 100.0f, results[2] * 100.0f, velocity[2]);
         // ESP_LOGW("MAHONY_DEBUG", "Quat: [%.2f, %.2f, %.2f, %.2f] | Bias-Free Gyro Y: %.1f",
 //                  q[0], q[1], q[2], q[3], (ring_buffer[WINDOW_SIZE-1][8] * 2.0f));
     }

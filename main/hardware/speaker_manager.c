@@ -26,7 +26,7 @@ static void speaker_task(void *pvParameters) {
         .dma_buf_count = 6,
         .dma_buf_len = 160
     };
-    i2s_pin_config_t pin_config = { .bck_io_num = 12, .ws_io_num = 0, .data_out_num = 2, .data_in_num = I2S_PIN_NO_CHANGE };
+    i2s_pin_config_t pin_config = { .bck_io_num = 34, .ws_io_num = 33, .data_out_num = 13, .data_in_num = I2S_PIN_NO_CHANGE };
     
     i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_NUM_0, &pin_config);

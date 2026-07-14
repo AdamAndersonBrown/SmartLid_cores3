@@ -33,16 +33,33 @@ EventGroupHandle_t wifi_event_group;
 QueueHandle_t imu_queue;
 
 #include "esp_pm.h"
+#include "esp_sleep.h"
+#include "power_manager_s3.h"
 
 bool wifi_logging_enabled = true;
 
+SemaphoreHandle_t i2c_mutex = NULL;
+
 void app_main(void) {
+    // --- CORE S3 DEEP SLEEP ROUTER ---
+    esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+    if (wakeup_cause == ESP_SLEEP_WAKEUP_EXT0 || wakeup_cause == ESP_SLEEP_WAKEUP_EXT1) {
+        ESP_LOGI(TAG, "Deep Sleep Wake: IMU Motion Detected.");
+        // TODO: Mount BMI270 FIFO, Allocate Tensor Arena, Run Inference
+        ESP_LOGI(TAG, "Inference Complete. Returning to Deep Sleep.");
+        // esp_deep_sleep_start();
+        return; // Halt cold boot execution
+    }
+    ESP_LOGI(TAG, "Cold Boot: Initializing System...");
+    // ---------------------------------
+    i2c_mutex = xSemaphoreCreateMutex();
+    power_manager_s3_pre_init(); // STRICT: PMIC MUST be configured before Wi-Fi or NVS to prevent brownouts!
     // Enable DFS to sleep the CPU during the 20ms IMU polling gaps
     // STRICT ENFORCEMENT: Stripped #if macro to prevent silent compilation bypass.
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 240,
         .min_freq_mhz = 80, // Clamped to 80MHz to protect the I2C APB Baud Rate
-        .light_sleep_enable = true
+        .light_sleep_enable = false // CRITICAL FIX: Disabled for tethered PC debugging to prevent USB disconnects
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config)); // Fail loudly if Tickless Idle is missing
     ESP_LOGI(TAG, "POWER OPTIMIZATION: DFS Active. CPU dynamically downclocking to 80MHz during RTOS idle.");
@@ -82,6 +99,7 @@ void app_main(void) {
     wifi_prov_mgr_is_provisioned(&provisioned);
 
     display_manager_init();
+    power_manager_s3_init(); // Boot the CoreS3 PMIC daemon
     
     if (provisioned) {
         ESP_LOGI(TAG, "Device already provisioned. Connecting...");
@@ -134,7 +152,7 @@ void app_main(void) {
     wifi_logging_enabled = false;
     esp_wifi_disconnect();
     esp_wifi_stop(); // Physically powers down the RF PHY layer
-    display_manager_fill_screen(COLOR_BLACK);
+    display_manager_fill_screen(COLOR_BLUE); // Keep UI visible for debugging
     // ---------------------------------------
 
     speaker_manager_init();

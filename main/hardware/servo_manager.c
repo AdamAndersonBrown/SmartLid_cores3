@@ -102,7 +102,7 @@ void servo_manager_init(void) {
     ESP_ERROR_CHECK(mcpwm_new_comparator(oper, &comparator_config, &comparator));
 
     mcpwm_gen_handle_t generator = NULL;
-    mcpwm_generator_config_t generator_config = { .gen_gpio_num = 33 }; // Core2 Port A
+    mcpwm_generator_config_t generator_config = { .gen_gpio_num = 8 }; // CoreS3 Port A (GPIO 33 is strictly internal I2S on S3!)
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &generator_config, &generator));
 
     ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(generator,

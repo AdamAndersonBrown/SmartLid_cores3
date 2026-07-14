@@ -1,3 +1,6 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+extern SemaphoreHandle_t i2c_mutex; // NEW: Global I2C Mutex
 #ifndef COMMON_DEFS_H
 #define COMMON_DEFS_H
 
@@ -13,7 +16,6 @@
 #define TENSOR_ARENA_SIZE 49152 // 48 * 1024 aligned with inference_manager.cpp
 
 
-#include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
 // --- Global Wi-Fi & Provisioning Event Bits ---

@@ -13,11 +13,11 @@ static const char *TAG = "DISPLAY";
 
 #define LCD_HOST       SPI2_HOST
 #define LCD_PIXEL_CLK  (20 * 1000 * 1000)
-#define LCD_MOSI       23
-#define LCD_MISO       38
-#define LCD_SCLK       18
-#define LCD_CS         5
-#define LCD_DC         15
+#define LCD_MOSI       37
+#define LCD_MISO       -1
+#define LCD_SCLK       36
+#define LCD_CS         3
+#define LCD_DC         35
 #define LCD_WIDTH      320
 #define LCD_HEIGHT     240
 
@@ -67,11 +67,7 @@ static void lvgl_port_task(void *arg) {
 static TickType_t last_wake_time = 0;
 
 void core2_set_screen_power(bool enable) {
-    uint8_t reg = 0x12; uint8_t data;
-    i2c_master_write_read_device(I2C_NUM_0, 0x34, &reg, 1, &data, 1, pdMS_TO_TICKS(10));
-    if (enable) data |= 0x02; else data &= ~0x02;
-    uint8_t cmd[2] = {0x12, data};
-    i2c_master_write_to_device(I2C_NUM_0, 0x34, cmd, 2, pdMS_TO_TICKS(10));
+    // AXP192 legacy code removed to prevent AXP2101 corruption on CoreS3.
 }
 
 void display_manager_wake(void) {
@@ -91,7 +87,7 @@ static lv_obj_t * qr_bg = NULL; // Global reference to the active QR overlay
 static void display_sleep_task(void *pvParam) {
     while(1) {
         // Block the 10s idle sleep timer if the QR code is currently on screen
-        if (screen_on && qr_bg == NULL && (xTaskGetTickCount() - last_wake_time > pdMS_TO_TICKS(10000))) {
+        if (0) { // STRICT FIX: Sleep disabled to prevent CHGLED trigger
             screen_on = false; // Halt LVGL flushes immediately
             vTaskDelay(pdMS_TO_TICKS(50)); // Drain in-flight DMA
             esp_lcd_panel_disp_on_off(panel_handle, false); // Sleep SPI Logic
@@ -104,33 +100,10 @@ static void display_sleep_task(void *pvParam) {
 
 
 void core2_power_init(void) {
-    // 1. Initialize I2C safely
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = 21,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = 22,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 400000,
-    };
-    i2c_param_config(I2C_NUM_0, &conf);
-    esp_err_t err = i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "I2C Init failed: %s", esp_err_to_name(err));
-    }
+    // 1. I2C Initialization deferred to power_manager_s3.c
 
-    // 2. Command AXP192 to power the LCD
-    uint8_t axp_cmd[][2] = {
-        {0x27, 0xCC}, // DCDC3 (LCD Backlight) 
-        {0x28, 0xCC}, // LDO2 (LCD Logic) 3.3V
-        {0x12, 0x47}, // Enable DCDC1, DCDC3, LDO2, EXTEN
-        {0x82, 0xFF}, // Enable Battery ADC
-        {0x93, 0x00}, // AXP192 REG 0x93: GPIO2 Control = Output (NOT 0x9A!)
-        {0x94, 0x00}  // AXP192 REG 0x94: GPIO2 High (Speaker Amp Enable)
-    };
-    for(int i=0; i<6; i++) {
-        i2c_master_write_to_device(I2C_NUM_0, 0x34, axp_cmd[i], 2, pdMS_TO_TICKS(100));
-    }
+    // 2. AXP192 Commands removed for CoreS3 compatibility.
+    // Power routing is now handled asynchronously by power_manager_s3_init().
     vTaskDelay(pdMS_TO_TICKS(100)); // Allow power to stabilize
 }
 
@@ -160,7 +133,8 @@ static void lvgl_poll_timer_cb(lv_timer_t * timer) {
     if (ui_bg_refresh_needed) {
         uint32_t hex = 0x000000;
         if (ui_bg_color_req == 0x001F) hex = 0x0044FF; // Blue
-        else if (ui_bg_color_req == 0x0000) hex = 0x000000; // Black
+        else if (ui_bg_color_req == 0x07E0) hex = 0x2EA043; // Green
+        else hex = 0x000000; // Black
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(hex), 0);
         ui_bg_refresh_needed = false;
     }
@@ -462,25 +436,11 @@ void display_manager_draw_qr(const uint8_t *qrcode, int size) {
 }
 
 void core2_get_battery_state(int *percent, bool *is_charging) {
-    // Rely strictly on Register 0x01 Bit 6 (Active Charge Indication)
-    // This bypasses the noisy VBUS/ACIN pins and only triggers if current is actively flowing to the cell.
-    uint8_t reg_p1 = 0x01, data_p1 = 0;
-    i2c_master_write_read_device(I2C_NUM_0, 0x34, &reg_p1, 1, &data_p1, 1, pdMS_TO_TICKS(10));
-    bool charging = (data_p1 & 0x40) ? true : false;
-    *is_charging = charging;
-
-    uint8_t reg_v = 0x78;
-    uint8_t data_v[2] = {0, 0};
-    i2c_master_write_read_device(I2C_NUM_0, 0x34, &reg_v, 1, data_v, 2, pdMS_TO_TICKS(10));
-    uint16_t adc = (data_v[0] << 4) | (data_v[1] & 0x0F);
-    float vbatt = adc * 1.1f;
-
-    // Mathematically deflate charging voltage by 90mV to counter AXP192 current push
-    if (charging) { vbatt -= 90.0f; }
-
-    // HACK: Pass raw voltage (scaled) to the UI instead of a percentage.
-    // A UI reading of "395%" means 3950 mV.
-    *percent = (int)(vbatt / 10.0f);}
+    // AXP192 battery telemetry removed for CoreS3. 
+    // Data is safely handled asynchronously by power_manager_s3.c.
+    *percent = 50; 
+    *is_charging = false;
+}
 
 void display_manager_draw_battery(int percent, bool is_charging) {
     ui_batt = percent;

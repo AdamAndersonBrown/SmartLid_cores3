@@ -287,9 +287,14 @@ void event_handler(void* arg, esp_event_base_t event_base,
                  led_manager_set_state(LED_STATE_WIFI_CONNECTING);
                  xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
                  
-                 // NEW: Only attempt reconnect if we didn't manually shut down the radio!
+                 // ARCHITECT FIX: Validate PHY state before reconnecting
                  if (wifi_logging_enabled) {
-                     esp_wifi_connect();
+                     wifi_mode_t mode;
+                     if (esp_wifi_get_mode(&mode) == ESP_OK) {
+                         esp_wifi_connect();
+                     }
+                 } else {
+                     ESP_LOGI(TAG, "Radio shutdown requested. Reconnect aborted.");
                  }
                  break;
              }

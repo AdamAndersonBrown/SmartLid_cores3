@@ -45,7 +45,9 @@ void power_manager_s3_pre_init(void) {
         .master.clk_speed = 100000, // 100kHz stabilizes the highly-congested CoreS3 shared bus
     };
     i2c_param_config(I2C_PORT, &conf);
-    i2c_driver_install(I2C_PORT, conf.mode, 0, 0, 0);
+    if (i2c_driver_install(I2C_PORT, conf.mode, 0, 0, 0) != ESP_OK) {
+        ESP_LOGW(TAG, "I2C driver already installed. Proceeding safely.");
+    }
 }
 
 extern void display_manager_draw_battery(int percent, bool is_charging);
@@ -80,6 +82,36 @@ static void power_manager_task(void *pvParameters) {
             if (err_bat == ESP_OK) {
                 // Strip the Data Valid bit (0x80) from the percentage
                 uint8_t percent = val_bat & 0x7F;
+                
+                // FALLBACK: AXP2101 E-Gauge returns 0% when uncalibrated.
+                // Fetch the live raw ADC battery voltage (Registers 0x34 & 0x35) directly.
+                if (percent == 0 || percent > 100) {
+                    uint8_t reg34 = 0x34, val34 = 0;
+                    uint8_t reg35 = 0x35, val35 = 0;
+                    if (i2c_master_write_read_device(I2C_PORT, AXP2101_ADDR, &reg34, 1, &val34, 1, pdMS_TO_TICKS(50)) == ESP_OK &&
+                        i2c_master_write_read_device(I2C_PORT, AXP2101_ADDR, &reg35, 1, &val35, 1, pdMS_TO_TICKS(50)) == ESP_OK) {
+                        
+                        uint16_t mv = (((uint16_t)(val34 & 0x3F)) << 8) | val35;
+                        
+                        uint8_t target_percent = 0;
+                        if (mv > 4150) target_percent = 100;
+                        else if (mv < 3300) target_percent = 0;
+                        else target_percent = (uint8_t)(((mv - 3300) * 10) / 85);
+                        
+                        // SLEW RATE LIMITER: Smooths out volatile voltage spikes during bulk charge
+                        static uint8_t smoothed_percent = 0;
+                        static bool initialized = false;
+                        if (!initialized) {
+                            smoothed_percent = target_percent;
+                            initialized = true;
+                        } else {
+                            if (target_percent > smoothed_percent) smoothed_percent++;
+                            else if (target_percent < smoothed_percent) smoothed_percent--;
+                        }
+                        percent = smoothed_percent;
+                    }
+                }
+
                 if (percent <= 100) { 
                     bool is_charging = (err_pmu == ESP_OK) ? ((val_pmu & 0x20) != 0) : false;
                     display_manager_draw_battery(percent, is_charging);
@@ -125,6 +157,18 @@ void power_manager_s3_init(void) {
     uint8_t out_reg = read_reg(AW9523_ADDR, 0x03);
     out_reg &= ~((1 << 0) | (1 << 1));
     write_reg(AW9523_ADDR, 0x03, out_reg);
+
+    // CRITICAL: Safely Disable USB OTG Boost (P0_5) to prevent PMIC reverse power
+    uint8_t aw_conf_read = 0x04, aw_conf_val = 0;
+    if (i2c_master_write_read_device(I2C_PORT, AW9523_ADDR, &aw_conf_read, 1, &aw_conf_val, 1, pdMS_TO_TICKS(50)) == ESP_OK) {
+        aw_conf_val &= ~(1 << 5);
+        write_reg(AW9523_ADDR, 0x04, aw_conf_val);
+    }
+    uint8_t aw_out_read = 0x02, aw_out_val = 0;
+    if (i2c_master_write_read_device(I2C_PORT, AW9523_ADDR, &aw_out_read, 1, &aw_out_val, 1, pdMS_TO_TICKS(50)) == ESP_OK) {
+        aw_out_val &= ~(1 << 5);
+        write_reg(AW9523_ADDR, 0x02, aw_out_val);
+    }
     
     vTaskDelay(pdMS_TO_TICKS(50));
     
@@ -139,7 +183,10 @@ void power_manager_s3_init(void) {
     write_reg(AXP2101_ADDR, 0x62, 0x0A); // Set Charge Limit to 300mA
 
     // CRITICAL: Wake up PMIC Battery ADCs and E-Gauge (Required for Bare-Metal)
-    write_reg(AXP2101_ADDR, 0x18, 0x22); // Enable Charging
+    uint8_t val18 = read_reg(AXP2101_ADDR, 0x18);
+    // Enable Charging (Bit 1) and ensure CHGLED is automatic (Clear Bit 5)
+    // Enable Charging (Bit 1), Force Manual Mode (Bit 5), and Float the Pin to turn LED OFF (Bit 4)
+    write_reg(AXP2101_ADDR, 0x18, val18 | 0x02);
     write_reg(AXP2101_ADDR, 0x27, 0x3F); // Enable all internal ADCs
     write_reg(AXP2101_ADDR, 0x69, 0x01); // Turn ON Fuel Gauge Processor
     

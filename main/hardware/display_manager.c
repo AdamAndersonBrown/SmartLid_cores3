@@ -30,7 +30,8 @@ static const char *TAG = "DISPLAY";
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static lv_disp_drv_t disp_drv; // Global reference for the DMA callback
 
-static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
+#include "esp_attr.h"
+static bool IRAM_ATTR notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
     lv_disp_flush_ready(&disp_drv);
     return false;
 }
@@ -74,18 +75,14 @@ void core2_set_screen_power(bool enable) {
 void display_manager_wake(void) {
     last_wake_time = xTaskGetTickCount();
     if (!screen_on) {
-        core2_set_screen_power(true);
-        esp_lcd_panel_disp_on_off(panel_handle, true);
-        vTaskDelay(pdMS_TO_TICKS(150)); // Hardware wake delay to prevent SPI lockup
+        core2_set_screen_power(true); // Restore backlight
         screen_on = true;
         
-        // Force LVGL to repaint the GRAM upon waking
+        // Force LVGL to repaint upon waking just in case
         if (lvgl_mux && xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(10)) == pdTRUE) {
             lv_obj_invalidate(lv_scr_act());
             xSemaphoreGive(lvgl_mux);
         }
-        
-        display_manager_draw_servo_buttons();
         ESP_LOGI("POWER", "Screen Woken Up");
     }
 }
@@ -96,13 +93,12 @@ static void display_sleep_task(void *pvParam) {
     while(1) {
         if (screen_on) {
             TickType_t now = xTaskGetTickCount();
-            if ((now - last_wake_time) > pdMS_TO_TICKS(10000)) { 
+            // 15 seconds to clear ML model loading time during boot
+            if ((now - last_wake_time) > pdMS_TO_TICKS(15000)) { 
                 if (qr_bg == NULL) { 
                     screen_on = false; 
-                    vTaskDelay(pdMS_TO_TICKS(50)); 
-                    esp_lcd_panel_disp_on_off(panel_handle, false); 
-                    core2_set_screen_power(false); 
-                    ESP_LOGI("POWER", "Screen Sleeping (10s Idle)");
+                    core2_set_screen_power(false); // Sever backlight ONLY. Leave LCD logic running.
+                    ESP_LOGI("POWER", "Screen Sleeping (15s Idle)");
                 }
             }
         }
@@ -213,15 +209,7 @@ static void lvgl_ui_init(void) {
     // Force the background explicitly black to fix the backlight optical illusion
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
     
-    // SURGICAL FIX: Force LVGL to paint a physical black rectangle over the entire screen.
-    // This prevents old ILI9341 GRAM contents (like the QR code) from surviving a software reboot.
-    lv_obj_t * force_bg = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(force_bg, LCD_WIDTH, LCD_HEIGHT);
-    lv_obj_set_style_bg_color(force_bg, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_border_width(force_bg, 0, 0);
-    lv_obj_set_style_radius(force_bg, 0, 0);
-    lv_obj_clear_flag(force_bg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_center(force_bg);
+    // force_bg physically removed to prevent LVGL Z-Index rendering occlusion.
     
     // Zone 1: System Status Header
     tv_status = lv_label_create(lv_scr_act());
@@ -401,9 +389,15 @@ void display_manager_draw_qr(const uint8_t *qrcode, int size) {
         int img_h = size * scale;
 
         if (!qr_img_data) {
-            // Attempt to allocate DMA capable memory first, fallback to standard heap
-            qr_img_data = heap_caps_malloc(img_w * img_h * sizeof(uint16_t), MALLOC_CAP_DMA);
+            qr_img_data = heap_caps_malloc(img_w * img_h * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
             if (!qr_img_data) qr_img_data = malloc(img_w * img_h * sizeof(uint16_t));
+        }
+
+        if (!qr_img_data) {
+            lv_obj_del(qr_bg);
+            qr_bg = NULL;
+            xSemaphoreGive(lvgl_mux);
+            return;
         }
 
         if (qr_img_data) {

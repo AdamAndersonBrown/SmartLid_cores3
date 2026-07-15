@@ -29,7 +29,11 @@ static uint8_t read_reg(uint8_t addr, uint8_t reg) {
     return val;
 }
 
+static bool is_pre_initialized = false;
 void power_manager_s3_pre_init(void) {
+    if (is_pre_initialized) return;
+    is_pre_initialized = true;
+
     if (i2c_mutex == NULL) i2c_mutex = xSemaphoreCreateMutex();
     
     i2c_config_t conf = {
@@ -68,39 +72,46 @@ static void power_manager_task(void *pvParameters) {
     }
 }
 
+static bool is_initialized = false;
 void power_manager_s3_init(void) {
+    if (is_initialized) return;
+    is_initialized = true;
+
     ESP_LOGI(TAG, "Initializing CoreS3 Power and AW9523B IO Expander...");
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // Power critical 3.3v Logic (ALDO2, ALDO4, DLDO1)
-    write_reg(AXP2101_ADDR, 0x93, 0x1C);
-    write_reg(AXP2101_ADDR, 0x95, 0x1C);
-    write_reg(AXP2101_ADDR, 0x99, 0x1C);
+    // Enable necessary PMIC LDOs (ALDO2, ALDO4, BLDO1, BLDO2, DLDO1) for LCD logic and CoreS3 hardware
+    write_reg(AXP2101_ADDR, 0x93, 0x1C); // ALDO2
+    write_reg(AXP2101_ADDR, 0x95, 0x1C); // ALDO4
+    write_reg(AXP2101_ADDR, 0x96, 0x1C); // BLDO1 (LCD AVDD)
+    write_reg(AXP2101_ADDR, 0x97, 0x1C); // BLDO2
+    write_reg(AXP2101_ADDR, 0x99, 0x1C); // DLDO1
     
     uint8_t ldo_reg = read_reg(AXP2101_ADDR, 0x90);
-    ldo_reg |= (1 << 1) | (1 << 3) | (1 << 7);
+    ldo_reg |= (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 7);
     write_reg(AXP2101_ADDR, 0x90, ldo_reg);
     
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // CRITICAL: Force AW9523 Port 1 to GPIO Mode (Default is LED mode)
-    // In LED mode, P1_1 floats as open-drain, permanently trapping the LCD in hardware reset!
-    write_reg(AW9523_ADDR, 0x12, 0xFF);
+    // CRITICAL: AW9523 Port 1 (0x13) MUST be in GPIO Mode. 
+    // P1_0 is Backlight, P1_1 is LCD Reset. LED mode floats them!
+    write_reg(AW9523_ADDR, 0x12, 0xFF); // Port 0 GPIO Mode
+    write_reg(AW9523_ADDR, 0x13, 0xFF); // Port 1 GPIO Mode
 
-    // Configure IO Expander for LCD Reset control (P1_1 Output)
+    // Configure P1_0 (Backlight) and P1_1 (Reset) as Outputs (0 = Output)
     uint8_t dir_reg = read_reg(AW9523_ADDR, 0x05);
-    dir_reg &= ~(1 << 1);
+    dir_reg &= ~((1 << 0) | (1 << 1));
     write_reg(AW9523_ADDR, 0x05, dir_reg);
 
-    // Pull LCD Reset LOW
+    // Pull Reset LOW, Backlight OFF
     uint8_t out_reg = read_reg(AW9523_ADDR, 0x03);
-    out_reg &= ~(1 << 1);
+    out_reg &= ~((1 << 0) | (1 << 1));
     write_reg(AW9523_ADDR, 0x03, out_reg);
     
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // Release LCD Reset HIGH
-    out_reg |= (1 << 1);
+    // Release Reset HIGH, Turn Backlight ON
+    out_reg |= ((1 << 0) | (1 << 1));
     write_reg(AW9523_ADDR, 0x03, out_reg);
     
     vTaskDelay(pdMS_TO_TICKS(150));
@@ -108,8 +119,9 @@ void power_manager_s3_init(void) {
 }
 
 void cores3_set_screen_power(bool enable) {
-    uint8_t ldo_reg = read_reg(AXP2101_ADDR, 0x90);
-    if (enable) ldo_reg |= (1 << 7);
-    else        ldo_reg &= ~(1 << 7);
-    write_reg(AXP2101_ADDR, 0x90, ldo_reg);
+    // CoreS3 LCD Backlight is driven by AW9523 P1_0, not PMIC DLDO1
+    uint8_t out_reg = read_reg(AW9523_ADDR, 0x03);
+    if (enable) out_reg |= (1 << 0);
+    else        out_reg &= ~(1 << 0);
+    write_reg(AW9523_ADDR, 0x03, out_reg);
 }

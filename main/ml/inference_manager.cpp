@@ -72,10 +72,12 @@ extern "C" void inference_push_data(int16_t ax, int16_t ay, int16_t az, int16_t 
     }
 
     // --- 2. KINEMATICS & MAHONY ---
-    float dt = 0.02f; float kp = 2.0f; float ki = 0.005f;
-    float ax_g = (ax / 16384.0f) + 0.0300f;
-    float ay_g = (ay / 16384.0f) - 0.0041f;
-    float az_g = (az / 16384.0f) + 0.0692f;
+    // Re-tuned Mahony gains for BMI270 (Lower kp prevents violent divergence during taps)
+    float dt = 0.02f; float kp = 0.5f; float ki = 0.001f;
+    // STRICT FIX: Eradicate hardcoded MPU6886 biases (Prevents phantom Mahony tilt)
+    float ax_g = (ax / 16384.0f);
+    float ay_g = (ay / 16384.0f);
+    float az_g = (az / 16384.0f);
 
     float gx_rad = ((gx - gyro_bias[0]) / 131.0f) * 0.0174533f;
     float gy_rad = ((gy - gyro_bias[1]) / 131.0f) * 0.0174533f;

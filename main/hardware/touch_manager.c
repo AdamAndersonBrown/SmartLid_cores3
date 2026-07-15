@@ -46,17 +46,15 @@ void touch_task(void *pvParameters) {
                 // HARDWARE FIX: Invert X-Axis to match physical Core2 LCD orientation
                 uint16_t x = raw_x; 
                 
+                display_manager_wake();
+                is_touched = true;
+                miss_count = 0;
+                
                 if (y >= 20 && y <= 100) {
-                    display_manager_wake();
-                    is_touched = true;
-                    miss_count = 0;
                     if (x < 100) { servo_set_manual(0); }
                     else if (x > 220) { servo_set_manual(180); }
                     else { servo_trigger_unlock_sequence(); }
                 } else if (y > 240) {
-                    display_manager_wake();
-                    is_touched = true;
-                    miss_count = 0;
                     
                     if (x < 100) { 
                         // LEFT CHIN: Factory Reset (7 seconds)

@@ -23,6 +23,7 @@ static const char *TAG = "DISPLAY";
 
 #include "lvgl.h"
 #include "esp_timer.h"
+#include "power_manager_s3.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -67,7 +68,7 @@ static void lvgl_port_task(void *arg) {
 static TickType_t last_wake_time = 0;
 
 void core2_set_screen_power(bool enable) {
-    // AXP192 legacy code removed to prevent AXP2101 corruption on CoreS3.
+    cores3_set_screen_power(enable);
 }
 
 void display_manager_wake(void) {
@@ -77,6 +78,13 @@ void display_manager_wake(void) {
         esp_lcd_panel_disp_on_off(panel_handle, true);
         vTaskDelay(pdMS_TO_TICKS(150)); // Hardware wake delay to prevent SPI lockup
         screen_on = true;
+        
+        // Force LVGL to repaint the GRAM upon waking
+        if (lvgl_mux && xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(10)) == pdTRUE) {
+            lv_obj_invalidate(lv_scr_act());
+            xSemaphoreGive(lvgl_mux);
+        }
+        
         display_manager_draw_servo_buttons();
         ESP_LOGI("POWER", "Screen Woken Up");
     }
@@ -85,16 +93,18 @@ void display_manager_wake(void) {
 static lv_obj_t * qr_bg = NULL; // Global reference to the active QR overlay
 
 static void display_sleep_task(void *pvParam) {
-    vTaskDelete(NULL); return; // STRICT FIX: Task obliterated
-
     while(1) {
-        // Block the 10s idle sleep timer if the QR code is currently on screen
-        if (0) { // STRICT FIX: Sleep disabled to prevent CHGLED trigger
-            screen_on = false; // Halt LVGL flushes immediately
-            vTaskDelay(pdMS_TO_TICKS(50)); // Drain in-flight DMA
-            esp_lcd_panel_disp_on_off(panel_handle, false); // Sleep SPI Logic
-            core2_set_screen_power(false);
-            ESP_LOGI("POWER", "Screen Sleeping (10s Idle)");
+        if (screen_on) {
+            TickType_t now = xTaskGetTickCount();
+            if ((now - last_wake_time) > pdMS_TO_TICKS(10000)) { 
+                if (qr_bg == NULL) { 
+                    screen_on = false; 
+                    vTaskDelay(pdMS_TO_TICKS(50)); 
+                    esp_lcd_panel_disp_on_off(panel_handle, false); 
+                    core2_set_screen_power(false); 
+                    ESP_LOGI("POWER", "Screen Sleeping (10s Idle)");
+                }
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -102,11 +112,9 @@ static void display_sleep_task(void *pvParam) {
 
 
 void core2_power_init(void) {
-    // 1. I2C Initialization deferred to power_manager_s3.c
-
-    // 2. AXP192 Commands removed for CoreS3 compatibility.
-    // Power routing is now handled asynchronously by power_manager_s3_init().
-    vTaskDelay(pdMS_TO_TICKS(100)); // Allow power to stabilize
+    power_manager_s3_pre_init();
+    power_manager_s3_init();
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 
@@ -173,6 +181,7 @@ static void lvgl_poll_timer_cb(lv_timer_t * timer) {
     if (ui_class_id != last_class) {
         last_class = ui_class_id;
         header_dirty = true;
+        display_manager_wake();
         if (ui_class_id == 1) {
             ui_state_str = "RATTLE";
             if(tv_telemetry) {
@@ -338,6 +347,7 @@ void display_manager_init(void) {
     display_manager_fill_screen(COLOR_BLACK);
     display_manager_draw_servo_buttons();
     lvgl_ui_init();
+    display_manager_wake(); // Reset RTOS sleep timer after heavy boot sequence
     ESP_LOGI(TAG, "LCD initialized successfully.");
 }
 

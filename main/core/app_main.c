@@ -8,6 +8,7 @@ extern void wifi_prov_print_qr(const char *name, const char *username, const cha
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "driver/i2c.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
@@ -97,7 +98,24 @@ void app_main(void) {
 
     bool provisioned = false;
     wifi_prov_mgr_is_provisioned(&provisioned);
+    // --- CORES3 HARDWARE LCD RESCUE ---
+    i2c_config_t i2c_conf = {
+        .mode = I2C_MODE_MASTER, .sda_io_num = 12, .scl_io_num = 11,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master = { .clk_speed = 400000 }
+    };
+    i2c_param_config(I2C_NUM_0, &i2c_conf);
+    i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0); // Ignore return if already installed
 
+    // AXP2101 Power Rails (Enable all ALDOs and DLDOs to 3.3V)
+    uint8_t pmic_cmds[][2] = {{0x90, 0xBF}, {0x92, 0x1C}, {0x93, 0x1C}, {0x94, 0x1C}, {0x95, 0x1C}, {0x99, 0xC0}, {0x9C, 0x1C}, {0x9D, 0x1C}};
+    for(int i=0; i<8; i++) i2c_master_write_to_device(I2C_NUM_0, 0x34, pmic_cmds[i], 2, pdMS_TO_TICKS(10));
+    
+    // AW9523 IO Expander (Force LCD Backlight and Reset HIGH)
+    uint8_t aw_cmds[][2] = {{0x04, 0x00}, {0x05, 0x00}, {0x12, 0xFF}, {0x13, 0xFF}, {0x02, 0xFF}, {0x03, 0xFF}};
+    for(int i=0; i<6; i++) i2c_master_write_to_device(I2C_NUM_0, 0x58, aw_cmds[i], 2, pdMS_TO_TICKS(10));
+    // ----------------------------------
+    
     display_manager_init();
     power_manager_s3_init(); // Boot the CoreS3 PMIC daemon
     
@@ -145,15 +163,11 @@ void app_main(void) {
     setenv("TZ", "PST8PDT", 1); // Pacific Time
     tzset();
     
-    // --- NEW: Go dark for multi-day test ---
-    vTaskDelay(pdMS_TO_TICKS(3000)); // Give SNTP time to sync the clock
-    
-    ESP_LOGI(TAG, "Initialization complete. Shutting down Wi-Fi for Deployment Mode.");
-    wifi_logging_enabled = false;
-    esp_wifi_disconnect();
-    esp_wifi_stop(); // Physically powers down the RF PHY layer
-    display_manager_fill_screen(COLOR_BLUE); // Keep UI visible for debugging
-    // ---------------------------------------
+        // STRICT FIX: Eradicated "Go Dark" Stealth Mode.
+    // Wi-Fi remains active for UDP telemetry, and the LCD remains visibly operational.
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    ESP_LOGI(TAG, "Initialization complete. Entering Active Diagnostic Mode.");
+    wifi_logging_enabled = true;
 
     // speaker_manager_init(); // DISABLED: Frees GPIO 0 (Green LED) and 12 (I2C)
     // servo_manager_init(); // DISABLED: Frees GPIO 33 (Audio Bus)

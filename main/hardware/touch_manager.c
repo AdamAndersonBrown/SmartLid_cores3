@@ -54,7 +54,7 @@ void touch_task(void *pvParameters) {
                     if (x < 100) { servo_set_manual(0); }
                     else if (x > 220) { servo_set_manual(180); }
                     else { servo_trigger_unlock_sequence(); }
-                } else if (y > 240) {
+                } else if (y >= 200) { // Shifted up 40px: CoreS3 lacks the >240 physical bezel
                     
                     if (x < 100) { 
                         // LEFT CHIN: Factory Reset (7 seconds)
@@ -81,6 +81,7 @@ void touch_task(void *pvParameters) {
                         wifi_held_time += 50; // Accumulate time
                         if (wifi_held_time >= 3000) {
                             wifi_logging_enabled = !wifi_logging_enabled;
+                            extern void display_manager_draw_wifi(int rssi, bool connected);
                             if (wifi_logging_enabled) {
                                 ESP_LOGW(TAG, "Diagnostic Mode: Wi-Fi WAKING UP");
                                 esp_wifi_start();
@@ -90,6 +91,7 @@ void touch_task(void *pvParameters) {
                                 esp_wifi_disconnect(); esp_wifi_stop(); 
                                 display_manager_fill_screen(0x0000); // COLOR_BLACK
                             }
+                            display_manager_draw_wifi(0, wifi_logging_enabled); // Alert UI of toggle
                             wifi_held_time = 0; 
                             vTaskDelay(pdMS_TO_TICKS(1000)); // Debounce toggle
                         }

@@ -442,10 +442,8 @@ void display_manager_draw_qr(const uint8_t *qrcode, int size) {
 }
 
 void core2_get_battery_state(int *percent, bool *is_charging) {
-    // AXP192 battery telemetry removed for CoreS3. 
-    // Data is safely handled asynchronously by power_manager_s3.c.
-    *percent = 50; 
-    *is_charging = false;
+    if (percent) *percent = ui_batt; 
+    if (is_charging) *is_charging = ui_charging;
 }
 
 void display_manager_draw_battery(int percent, bool is_charging) {

@@ -92,9 +92,9 @@ static lv_obj_t * qr_bg = NULL; // Global reference to the active QR overlay
 static void display_sleep_task(void *pvParam) {
     while(1) {
         if (screen_on) {
-            TickType_t now = xTaskGetTickCount();
+            TickType_t now = xTaskGetTickCount(); (void)now;
             // 15 seconds to clear ML model loading time during boot
-            if ((now - last_wake_time) > pdMS_TO_TICKS(15000)) { 
+            if (0) { // ARCHITECT FIX: Force screen ALWAYS ON for sensor debugging 
                 if (qr_bg == NULL) { 
                     screen_on = false; 
                     core2_set_screen_power(false); // Sever backlight ONLY. Leave LCD logic running.

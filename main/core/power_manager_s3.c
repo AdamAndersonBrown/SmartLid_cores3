@@ -195,9 +195,23 @@ void power_manager_s3_init(void) {
 }
 
 void cores3_set_screen_power(bool enable) {
-    // CoreS3 LCD Backlight is driven by AW9523 P1_0, not PMIC DLDO1
-    uint8_t out_reg = read_reg(AW9523_ADDR, 0x03);
-    if (enable) out_reg |= (1 << 0);
-    else        out_reg &= ~(1 << 0);
-    write_reg(AW9523_ADDR, 0x03, out_reg);
+    static uint8_t cached_out_reg = 0xFF; 
+    if (enable) {
+        cached_out_reg |= (1 << 0);
+    } else {
+        cached_out_reg &= ~(1 << 0);
+    }
+    bool success = false;
+    while (!success) {
+        if (i2c_mutex && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            uint8_t buf[2] = {0x03, cached_out_reg};
+            if (i2c_master_write_to_device(I2C_PORT, AW9523_ADDR, buf, 2, pdMS_TO_TICKS(50)) == ESP_OK) {
+                success = true;
+            }
+            xSemaphoreGive(i2c_mutex);
+        }
+        if (!success) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
 }

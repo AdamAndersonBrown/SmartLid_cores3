@@ -81,10 +81,41 @@ static void imu_sensor_task(void *pvParameters) {
 
                 int16_t delta = abs(acc_x - last_ax) + abs(acc_y - last_ay) + abs(acc_z - last_az);
                 
-                imu_sample_t sample = {acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z};
-                xQueueSend(imu_queue, &sample, 0); 
+                // ARCHITECT FIX: IMU Low Power State Machine
+                static bool imu_is_awake = false;
+                static int awake_frame_count = 0;
                 
-                if (delta > 6000) display_manager_wake(); 
+                if (!imu_is_awake && delta > 6000) {
+                    uint8_t wake_cmds[][2] = {{0x7C, 0x00}, {0x7D, 0x0E}}; // APS OFF, Gyro ON
+                    i2c_master_write_to_device(I2C_MASTER_NUM, BMI270_ADDR, wake_cmds[0], 2, pdMS_TO_TICKS(10));
+                    i2c_master_write_to_device(I2C_MASTER_NUM, BMI270_ADDR, wake_cmds[1], 2, pdMS_TO_TICKS(10));
+                    imu_is_awake = true;
+                    awake_frame_count = 150; // Keep awake for 3 seconds (50Hz)
+                    display_manager_wake();
+                    ESP_LOGW(TAG, "Kinetic event! Waking IMU Gyroscope for 3 seconds.");
+                }
+                
+                if (imu_is_awake) {
+                    awake_frame_count--;
+                    if (awake_frame_count <= 0) {
+                        uint8_t sleep_cmds[][2] = {{0x7D, 0x04}, {0x7C, 0x02}}; // Gyro OFF, APS ON
+                        i2c_master_write_to_device(I2C_MASTER_NUM, BMI270_ADDR, sleep_cmds[0], 2, pdMS_TO_TICKS(10));
+                        i2c_master_write_to_device(I2C_MASTER_NUM, BMI270_ADDR, sleep_cmds[1], 2, pdMS_TO_TICKS(10));
+                        imu_is_awake = false;
+                        ESP_LOGI(TAG, "Timeout reached. IMU returning to super low power mode.");
+                    }
+                }
+
+                // Push zeros for Gyro if asleep to stabilize ML filter
+                imu_sample_t sample = {
+                    acc_x, acc_y, acc_z, 
+                    imu_is_awake ? gyro_x : 0, 
+                    imu_is_awake ? gyro_y : 0, 
+                    imu_is_awake ? gyro_z : 0
+                };
+                xQueueSend(imu_queue, &sample, 0);
+                ESP_LOGI(TAG, "RAW IMU -> Accel: [%6d, %6d, %6d] | Gyro: [%6d, %6d, %6d]", acc_x, acc_y, acc_z, imu_is_awake ? gyro_x : 0, imu_is_awake ? gyro_y : 0, imu_is_awake ? gyro_z : 0); 
+                
                 last_ax = acc_x; last_ay = acc_y; last_az = acc_z;
             }
             xSemaphoreGive(i2c_mutex);
